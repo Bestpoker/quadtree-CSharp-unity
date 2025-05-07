@@ -10,15 +10,15 @@ public class GameMgr : MonoBehaviour
 
     public RectTransform playerTrans;
 
-    private List<Quadtree.Rect> allRects = new List<Quadtree.Rect>();
+    private List<QuadTree.QuadTreeRect> allRects = new List<QuadTree.QuadTreeRect>();
 
-    private List<Quadtree.Rect> colliderResultRects;
+    private List<QuadTree.QuadTreeRect> colliderResultRects = new List<QuadTree.QuadTreeRect>(128);
 
     private Vector2 cameraSize;
 
-    private Quadtree.Rect playerRect;
+    private QuadTree.QuadTreeRect playerRect;
 
-    public Quadtree rootTree;
+    public QuadTree rootTree;
 
     public static GameObject imagePrefab;
 
@@ -37,19 +37,15 @@ public class GameMgr : MonoBehaviour
         lineParent = lines;
 
         cameraSize.x = Camera.main.pixelWidth / 2f;
+        
         cameraSize.y = Camera.main.pixelHeight / 2f;
 
-        rootTree = new Quadtree(new Quadtree.Rect
-        {
-            x = 0,
-            y = 0,
-            width = Camera.main.pixelWidth,
-            height = Camera.main.pixelHeight
-        }, maxObjectsInGrid, maxLevel);
+        rootTree = new QuadTree(0, 0, Camera.main.pixelWidth, Camera.main.pixelHeight, maxObjectsInGrid, maxLevel);
 
-        playerRect = new Quadtree.Rect
+        playerRect = new QuadTree.QuadTreeRect
         {
             width = playerTrans.sizeDelta.x,
+            
             height = playerTrans.sizeDelta.y
         };
     }
@@ -77,12 +73,22 @@ public class GameMgr : MonoBehaviour
 
         if (Input.GetKeyUp(KeyCode.C)) Clear();
 
-        colliderResultRects = rootTree.Retrieve(playerRect);
+        var colliderResultRectsTemp = rootTree.Check(playerRect);
 
-        for (var i = 0; i < colliderResultRects.Count; i++)
+        if (colliderResultRects != null)
         {
-            colliderResultRects[i].image.color = Color.red;
+            colliderResultRects.AddRange(colliderResultRectsTemp);
+
+            for (var i = 0; i < colliderResultRects.Count; i++)
+            {
+                colliderResultRects[i].image.color = Color.red;
+            }
         }
+
+        
+
+        
+
     }
 
     public void AddCube()
@@ -102,14 +108,19 @@ public class GameMgr : MonoBehaviour
         rt.localPosition = new Vector3(x, y, 0);
 
         var image = rt.GetComponent<Image>();
+        
         image.color = Color.green;
 
-        var rect = new Quadtree.Rect
+        var rect = new QuadTree.QuadTreeRect
         {
             x = x,
+            
             y = y,
+            
             width = width,
+            
             height = height,
+            
             image = image
         };
 
@@ -128,11 +139,79 @@ public class GameMgr : MonoBehaviour
     }
 }
 
-public class Quadtree
-{
-    public Rect bounds;
 
-    public List<Quadtree> childTrees;
+public class QuadTree
+{
+    public class QuadTreeRect
+    {
+        private static ulong unitIDCounter;
+        
+        public ulong unitID;
+        
+        public float height;
+
+        public float width;
+
+        public float x;
+
+        public float y;
+
+        public Image image;
+        
+        private static Queue<QuadTreeRect> rectPool = new Queue<QuadTreeRect>(256);
+
+        public static QuadTreeRect GetRect()
+        {
+            unitIDCounter++;
+
+            QuadTreeRect rect = null;
+            
+            if (rectPool.Count > 0)
+            {
+                rect = rectPool.Dequeue();
+            }
+            else
+            {
+                rect = new QuadTreeRect();
+            }
+
+            rect.unitID = unitIDCounter;
+
+            return rect;
+
+        }
+
+        public static QuadTreeRect GetRect(float posX, float posY, float width, float height)
+        {
+            var rect = GetRect();
+
+            rect.x = posX;
+
+            rect.y = posY;
+
+            rect.width = width;
+
+            rect.height = height;
+
+            return rect;
+
+        }
+
+        public void Recycle()
+        {
+            if (rectPool.Count < 256)
+            {
+                rectPool.Enqueue(this);
+            }
+        }
+        
+        
+        
+    }
+    
+    public QuadTreeRect bounds;
+
+    public List<QuadTree> childTrees;
 
     public int level;
 
@@ -140,31 +219,51 @@ public class Quadtree
 
     public int max_objects;
 
-    public List<Rect> rectObs;
+    public List<QuadTreeRect> rectObs;
+
+    private List<QuadTreeRect> checkObList;
+
+    private HashSet<QuadTreeRect> checkObHash;
+
+    private List<int> indexes;
 
     public GameObject verticalLine;
 
     public GameObject horizontalLine;
 
-
-    public Quadtree(Rect bounds, int max_objects, int max_levels, int level = 0)
+    public QuadTree(float posX, float posY, float width, float height, int max_objects, int max_levels, int level = 0)
     {
         this.max_objects = max_objects;
+        
         this.max_levels = max_levels;
 
         this.level = level;
-        this.bounds = bounds;
+        
+        this.bounds = QuadTreeRect.GetRect(posX, posY, width, height);
 
-        rectObs = new List<Rect>();
-        childTrees = new List<Quadtree>(4);
+        rectObs = new List<QuadTreeRect>(max_objects);
+        
+        childTrees = new List<QuadTree>(4);
+
+        var checkCount = max_objects * Mathf.Max(1, max_levels - level);
+
+        checkObList = new List<QuadTreeRect>(checkCount);
+
+        checkObHash = new HashSet<QuadTreeRect>(checkCount);
+        
+        indexes = new List<int>(4);
     }
 
     public void Split()
     {
         var nextLevel = level + 1;
+        
         var subWidth = bounds.width / 2;
+        
         var subHeight = bounds.height / 2;
+        
         var x = bounds.x;
+        
         var y = bounds.y;
 
         var parent = GameMgr.lineParent;
@@ -175,7 +274,7 @@ public class Quadtree
 
         verticalLine.GetComponent<Image>().color = Color.black;
 
-        verticalLine.GetComponent<RectTransform>().sizeDelta = new Vector2(1, bounds.height);
+        verticalLine.GetComponent<RectTransform>().sizeDelta = new Vector2(3, bounds.height);
 
         verticalLine.transform.localPosition = new Vector3(x, y, 0);
 
@@ -183,134 +282,134 @@ public class Quadtree
 
         horizontalLine.GetComponent<Image>().color = Color.black;
 
-        horizontalLine.GetComponent<RectTransform>().sizeDelta = new Vector2(bounds.width, 1);
+        horizontalLine.GetComponent<RectTransform>().sizeDelta = new Vector2(bounds.width, 3);
 
         horizontalLine.transform.localPosition = new Vector3(x, y, 0);
+        
+        childTrees.Add(new QuadTree(x + subWidth / 2, y + subHeight / 2, subWidth, subHeight,max_objects, max_levels, nextLevel));
 
+        childTrees.Add(new QuadTree(x - subWidth / 2, y + subHeight / 2, subWidth, subHeight, max_objects, max_levels, nextLevel));
 
-        //top right node
-        childTrees.Add(new Quadtree(new Rect
-        {
-            x = x + subWidth / 2,
-            y = y + subHeight / 2,
-            width = subWidth,
-            height = subHeight
-        }, max_objects, max_levels, nextLevel));
-
-        //top left node
-        childTrees.Add(new Quadtree(new Rect
-        {
-            x = x - subWidth / 2,
-            y = y + subHeight / 2,
-            width = subWidth,
-            height = subHeight
-        }, max_objects, max_levels, nextLevel));
-
-        //bottom left node
-        childTrees.Add(new Quadtree(new Rect
-        {
-            x = x - subWidth / 2,
-            y = y - subHeight / 2,
-            width = subWidth,
-            height = subHeight
-        }, max_objects, max_levels, nextLevel));
-
-        //bottom right node
-        childTrees.Add(new Quadtree(new Rect
-        {
-            x = x + subWidth / 2,
-            y = y - subHeight / 2,
-            width = subWidth,
-            height = subHeight
-        }, max_objects, max_levels, nextLevel));
+        childTrees.Add(new QuadTree(x - subWidth / 2, y - subHeight / 2, subWidth, subHeight, max_objects, max_levels, nextLevel));
+        
+        childTrees.Add(new QuadTree(x + subWidth / 2, y - subHeight / 2, subWidth, subHeight, max_objects, max_levels, nextLevel));
     }
 
 
-    public List<int> GetIndex(Rect pRect)
+    public List<int> GetIndex(QuadTreeRect pRect)
     {
-        var indexes = new List<int>();
-
+        indexes.Clear();
+        
         var startIsNorth = pRect.y + pRect.height / 2 > bounds.y;
+        
         var startIsWest = pRect.x - pRect.width / 2 < bounds.x;
+        
         var endIsEast = pRect.x + pRect.width / 2 > bounds.x;
+        
         var endIsSouth = pRect.y - pRect.height / 2 < bounds.y;
 
-        //top-right quad
         if (startIsNorth && endIsEast) indexes.Add(0);
 
-        //top-left quad
         if (startIsNorth && startIsWest) indexes.Add(1);
 
-        //bottom-left quad
         if (startIsWest && endIsSouth) indexes.Add(2);
 
-        //bottom-right quad
         if (endIsEast && endIsSouth) indexes.Add(3);
 
         return indexes;
     }
 
-    public void Insert(Rect pRect)
+    public void Insert(QuadTreeRect pRect)
     {
         var i = 0;
 
-        //if we have subnodes, call insert on matching subnodes
         if (childTrees.Count > 0)
         {
-            var indexes = GetIndex(pRect);
+            var indexesTemp = GetIndex(pRect);
 
-            for (i = 0; i < indexes.Count; i++) childTrees[indexes[i]].Insert(pRect);
+            for (i = 0; i < indexesTemp.Count; i++)
+            {
+                var childTreeIndex = indexesTemp[i];
+
+                childTrees[childTreeIndex].Insert(pRect);
+            }
+
             return;
         }
 
-        //otherwise, store object here
         rectObs.Add(pRect);
 
-        //max_objects reached
         if (rectObs.Count > max_objects && level < max_levels)
         {
-            //split if we don't already have subnodes
             if (childTrees.Count == 0) Split();
 
-            //add all objects to their corresponding subnode
             for (i = 0; i < rectObs.Count; i++)
             {
-                var indexes = GetIndex(rectObs[i]);
-                for (var k = 0; k < indexes.Count; k++) childTrees[indexes[k]].Insert(rectObs[i]);
+                var indexesTemp = GetIndex(rectObs[i]);
+
+                for (var k = 0; k < indexesTemp.Count; k++)
+                {
+                    var childTreeIndex = indexesTemp[k];
+
+                    childTrees[childTreeIndex].Insert(rectObs[i]);
+                }
             }
 
-            //clean up this node
             rectObs.Clear();
         }
     }
 
-    public List<Rect> Retrieve(Rect pRect)
+    public QuadTreeRect Insert(float posX, float posY, float width, float height)
     {
-        var indexes = GetIndex(pRect);
-        var returnObjects = new List<Rect>();
+        var pRect = QuadTreeRect.GetRect(posX, posY, width, height);
+        
+        Insert(pRect);
 
-        returnObjects.AddRange(rectObs);
+        return pRect;
+    }
 
-        //if we have subnodes, retrieve their objects
-        if (childTrees.Count > 0)
-            for (var i = 0; i < indexes.Count; i++)
-            {
-                var temp = childTrees[indexes[i]].Retrieve(pRect);
+    public List<QuadTreeRect> Check(QuadTreeRect pRect)
+    {
+        checkObHash.Clear();
 
-                returnObjects.AddRange(temp);
-            }
+        checkObList.Clear();
 
-
-        //remove duplicates
-        for (var i = returnObjects.Count - 1; i >= 0; i--)
+        for (int i = 0; i < rectObs.Count; i++)
         {
-            var item = returnObjects[i];
-            var firstIndex = returnObjects.IndexOf(item);
+            var rectTemp = rectObs[i];
 
-            if (firstIndex != i) returnObjects.RemoveAt(i);
+            if (checkObHash.Add(rectTemp))
+            {
+                checkObList.AddRange(rectObs);
+            }
+        }
+        
+
+        if (childTrees.Count > 0)
+        {
+            var indexesTemp = GetIndex(pRect);
+            
+            for (var i = 0; i < indexesTemp.Count; i++)
+            {
+                var childTreeIndex = indexesTemp[i];
+                
+                var tempList = childTrees[childTreeIndex].Check(pRect);
+
+                for (int j = 0; j < tempList.Count; j++)
+                {
+                    var rectTemp = tempList[j];
+
+                    if (checkObHash.Add(rectTemp))
+                    {
+                        checkObList.Add(rectTemp);
+                    }
+                    
+                }
+                
+            }
         }
 
-        return returnObjects;
+        return checkObList;
     }
 
     public void Clear()
@@ -319,40 +418,46 @@ public class Quadtree
         {
             if (rectObs[i].image != null)
             {
-                GameObject.Destroy(rectObs[i].image.gameObject);
+                Object.Destroy(rectObs[i].image.gameObject);
             }
+
+            rectObs[i].Recycle();
         }
 
         rectObs.Clear();
+        
+        checkObHash.Clear();
+        
+        checkObList.Clear();
+
+        indexes.Clear();
 
         if (horizontalLine != null)
         {
-            GameObject.Destroy(horizontalLine);
+            Object.Destroy(horizontalLine);
+
+            horizontalLine = null;
         }
 
         if (verticalLine != null)
         {
-            GameObject.Destroy(verticalLine);
+            Object.Destroy(verticalLine);
+
+            verticalLine = null;
         }
 
         for (var i = 0; i < childTrees.Count; i++)
+        {
             childTrees[i].Clear();
-
+        }
 
         childTrees.Clear();
     }
 
+    
+    
 
-    public class Rect
-    {
-        public float height;
 
-        public float width;
-
-        public float x;
-
-        public float y;
-
-        public Image image;
-    }
+    
+    
 }
